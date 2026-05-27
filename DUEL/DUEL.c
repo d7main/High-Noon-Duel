@@ -11,7 +11,7 @@
 #include <time.h>
 #include <stdio.h>
 
- // --- Config & Constants ---
+ //Config & Constants
 #define WIN_WIDTH 800
 #define WIN_HEIGHT 400
 #define GROUND_Y 300
@@ -34,7 +34,7 @@
 #define COL_UI_BG    RGB(15, 15, 20)
 #define COL_UI_ACCENT RGB(0, 255, 255) // Cyan text & borders
 
-// --- Data Structures ---
+// Data Structures 
 typedef struct {
     float x, y, dy;
     int width, height;
