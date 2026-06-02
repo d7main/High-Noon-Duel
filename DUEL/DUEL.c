@@ -1,8 +1,7 @@
 /**
  * HIGH NOON DUEL - 1985 Arcade Style Western
- * * A minimalistic Win32 API game written in pure C.
+ * A minimalistic Win32 API game written in pure C.
  * Features state machine, CRT scanline effects, and dynamic difficulty.
- * No external libraries (SDL/SFML) required.
  * @author d7main
  */
 
@@ -11,28 +10,37 @@
 #include <time.h>
 #include <stdio.h>
 
- //Config & Constants
+ // Config & Constants
 #define WIN_WIDTH 800
 #define WIN_HEIGHT 400
 #define GROUND_Y 300
 #define FPS_DELAY 16
 
-// Game States
-#define STATE_MENU 0
-#define STATE_PLAY 1
-#define STATE_OVER 2
-
 // Color Palette (80s Arcade)
-#define COL_SKY      RGB(220, 80, 30)
-#define COL_SUN      RGB(255, 200, 0)
-#define COL_SAND     RGB(180, 100, 40)
-#define COL_SHERIFF  RGB(0, 120, 200)
-#define COL_BANDIT   RGB(200, 30, 30)
-#define COL_HAT      RGB(80, 40, 10)
-#define COL_CACTUS   RGB(40, 140, 40)
-#define COL_BULLET   RGB(255, 255, 255)
-#define COL_UI_BG    RGB(15, 15, 20)
-#define COL_UI_ACCENT RGB(0, 255, 255) // Cyan text & borders
+#define COL_SKY       RGB(220, 80, 30)
+#define COL_SUN       RGB(255, 200, 0)
+#define COL_SAND      RGB(180, 100, 40)
+#define COL_SHERIFF   RGB(0, 120, 200)
+#define COL_BANDIT    RGB(200, 30, 30)
+#define COL_HAT       RGB(80, 40, 10)
+#define COL_CACTUS    RGB(40, 140, 40)
+#define COL_BULLET    RGB(255, 255, 255)
+#define COL_UI_BG     RGB(15, 15, 20)
+#define COL_UI_ACCENT RGB(0, 255, 255)
+#define COL_DUST      RGB(235, 150, 70) 
+
+// Game System Enumerations
+typedef enum {
+    STATE_MENU,
+    STATE_PLAY,
+    STATE_OVER
+} GameState;
+
+typedef enum {
+    AMMO_NORMAL,
+    AMMO_FAST,
+    AMMO_HEAVY
+} AmmoType;
 
 // Data Structures 
 typedef struct {
@@ -46,21 +54,35 @@ typedef struct {
     int isActive;
 } Projectile;
 
-//  Global State 
+typedef struct {
+    float x, y, dx, dy;
+    int life;
+} Particle;
+
+// Effects State
+Particle dust[20] = { 0 };
+Particle sparks[15] = { 0 };
+int pFlash = 0;
+int eFlash = 0;
+
+// Global Game State
 Entity sheriff;
 Entity bandit;
 Projectile pBullet = { 0 };
 Projectile eBullet = { 0 };
 
-int gameState = STATE_MENU;
+GameState gameState = STATE_MENU;
+AmmoType currentAmmo = AMMO_NORMAL;
+
+int playerHP = 3;
+int enemyHP = 3;
 int currentScore = 0;
 int highScore = 0;
 int frameCounter = 0;
 int enemyFireDelay = 50;
 int respawnTimer = 0;
 
-// Game Logic 
-
+// Game Logic Functions
 void SpawnBandit() {
     bandit.x = 700;
     bandit.y = GROUND_Y - 60;
@@ -72,6 +94,10 @@ void SpawnBandit() {
 }
 
 void ResetGameSession() {
+    playerHP = 3;
+    enemyHP = 3;
+    currentAmmo = AMMO_NORMAL;
+
     sheriff.x = 50;
     sheriff.y = GROUND_Y - 60;
     sheriff.width = 24;
@@ -88,12 +114,21 @@ void ResetGameSession() {
     respawnTimer = 0;
 
     SpawnBandit();
+
+
+    for (int i = 0; i < 20; i++) {
+        dust[i].x = (float)(rand() % WIN_WIDTH);
+        dust[i].y = (float)(rand() % (WIN_HEIGHT - 40));
+        dust[i].dx = -4.0f - (rand() % 4);
+        dust[i].life = 80 + (rand() % 60);
+    }
 }
 
 void UpdatePhysicsAndLogic() {
+    if (GetAsyncKeyState('1') & 0x8000) currentAmmo = AMMO_NORMAL;
+    if (GetAsyncKeyState('2') & 0x8000) currentAmmo = AMMO_FAST;
+    if (GetAsyncKeyState('3') & 0x8000) currentAmmo = AMMO_HEAVY;
 
-
-    // Sheriff Physics
     if (sheriff.isJumping) {
         sheriff.dy += 1.2f;
         sheriff.y += sheriff.dy;
@@ -104,7 +139,6 @@ void UpdatePhysicsAndLogic() {
         }
     }
 
-    // Bandit AI
     if (bandit.isAlive) {
         if (frameCounter % 40 == 0) {
             bandit.isDucking = (rand() % 3 == 0) ? 1 : 0;
@@ -114,10 +148,10 @@ void UpdatePhysicsAndLogic() {
             eBullet.y = bandit.isDucking ? bandit.y + 40 : bandit.y + 20;
             eBullet.dx = -12.0f - (currentScore / 500.0f);
             eBullet.isActive = 1;
+            eFlash = 4;
         }
     }
 
-    // Player Bullet Update
     if (pBullet.isActive) {
         pBullet.x += pBullet.dx;
         if (pBullet.x > WIN_WIDTH) pBullet.isActive = 0;
@@ -126,16 +160,28 @@ void UpdatePhysicsAndLogic() {
         if (bandit.isAlive && pBullet.x >= bandit.x && pBullet.x <= bandit.x + bandit.width &&
             pBullet.y >= hitBoxTop && pBullet.y <= bandit.y + bandit.height) {
 
-            bandit.isAlive = 0;
             pBullet.isActive = 0;
-            currentScore += 100;
-            respawnTimer = 35;
+            int damage = (currentAmmo == AMMO_HEAVY) ? 2 : 1;
+            enemyHP -= damage;
 
-            if (enemyFireDelay > 15) enemyFireDelay -= 3;
+            for (int i = 0; i < 15; i++) {
+                sparks[i].x = bandit.x;
+                sparks[i].y = pBullet.y;
+                sparks[i].dx = (float)((rand() % 10) - 5);
+                sparks[i].dy = (float)((rand() % 10) - 5);
+                sparks[i].life = 10 + (rand() % 10);
+            }
+
+            if (enemyHP <= 0) {
+                bandit.isAlive = 0;
+                currentScore += 100;
+                respawnTimer = 35;
+                enemyHP = 3;
+                if (enemyFireDelay > 15) enemyFireDelay -= 3;
+            }
         }
     }
 
-    // Enemy Bullet Update
     if (eBullet.isActive) {
         eBullet.x += eBullet.dx;
         if (eBullet.x < 0) eBullet.isActive = 0;
@@ -143,25 +189,56 @@ void UpdatePhysicsAndLogic() {
         int hitBoxTop = sheriff.isDucking ? sheriff.y + 30 : sheriff.y;
         if (eBullet.x >= sheriff.x && eBullet.x <= sheriff.x + sheriff.width &&
             eBullet.y >= hitBoxTop && eBullet.y <= sheriff.y + sheriff.height) {
-            sheriff.isAlive = 0;
-            if (currentScore > highScore) highScore = currentScore;
-            gameState = STATE_OVER;
+
+            eBullet.isActive = 0;
+            playerHP -= 1;
+
+            for (int i = 0; i < 15; i++) {
+                sparks[i].x = sheriff.x + sheriff.width;
+                sparks[i].y = eBullet.y;
+                sparks[i].dx = (float)((rand() % 10) - 5);
+                sparks[i].dy = (float)((rand() % 10) - 5);
+                sparks[i].life = 10 + (rand() % 10);
+            }
+
+            if (playerHP <= 0) {
+                sheriff.isAlive = 0;
+                if (currentScore > highScore) highScore = currentScore;
+                gameState = STATE_OVER;
+            }
         }
     }
 
-    // Fixed Respawn logic
     if (!bandit.isAlive) {
-        if (respawnTimer > 0) {
-            respawnTimer--;
+        if (respawnTimer > 0) respawnTimer--;
+        else SpawnBandit();
+    }
+
+    if (pFlash > 0) pFlash--;
+    if (eFlash > 0) eFlash--;
+
+    // Fix dust
+    for (int i = 0; i < 20; i++) {
+        if (dust[i].life <= 0 || dust[i].x < 0) {
+            dust[i].x = (float)(WIN_WIDTH + (rand() % 100));
+            dust[i].y = (float)(rand() % (WIN_HEIGHT - 40));
+            dust[i].dx = -4.0f - (rand() % 4);
+            dust[i].life = 80 + (rand() % 60);
         }
-        else {
-            SpawnBandit();
+        dust[i].x += dust[i].dx;
+        dust[i].life--;
+    }
+
+    for (int i = 0; i < 15; i++) {
+        if (sparks[i].life > 0) {
+            sparks[i].x += sparks[i].dx;
+            sparks[i].y += sparks[i].dy;
+            sparks[i].life--;
         }
     }
 }
 
-//Rendering 
-
+// Rendering Functions
 void DrawCowboy(HDC hdc, Entity* c, COLORREF shirtCol) {
     if (!c->isAlive) return;
 
@@ -199,12 +276,10 @@ void RenderScene(HDC hdc) {
     char textBuf[64];
 
     if (gameState == STATE_MENU) {
-        //  ARCADE ATTRACT MODE MENU
         HBRUSH bgBrush = CreateSolidBrush(COL_UI_BG);
         RECT bg = { 0, 0, WIN_WIDTH, WIN_HEIGHT };
         FillRect(memDC, &bg, bgBrush);
         DeleteObject(bgBrush);
-
 
         HBRUSH borderBrush = CreateSolidBrush(COL_UI_ACCENT);
         RECT topBorder = { 20, 20, WIN_WIDTH - 20, 25 };
@@ -218,24 +293,19 @@ void RenderScene(HDC hdc) {
         DeleteObject(borderBrush);
 
         SetBkMode(memDC, TRANSPARENT);
-
-
         SetTextColor(memDC, COL_UI_ACCENT);
         SelectObject(memDC, fontTitle);
         TextOutA(memDC, WIN_WIDTH / 2 - 230, 60, "HIGH NOON DUEL", 14);
-
 
         Entity dummy1 = { 220, 150, 0, 24, 60, 0, 0, 1 };
         Entity dummy2 = { 556, 150, 0, 24, 60, 0, 0, 1 };
         DrawCowboy(memDC, &dummy1, COL_SHERIFF);
         DrawCowboy(memDC, &dummy2, COL_BANDIT);
 
-
         SelectObject(memDC, fontSmall);
         SetTextColor(memDC, RGB(255, 255, 0));
         sprintf_s(textBuf, sizeof(textBuf), "TOP BOUNTY: $%d", highScore);
         TextOutA(memDC, WIN_WIDTH / 2 - 110, 160, textBuf, (int)strlen(textBuf));
-
 
         if ((frameCounter / 30) % 2 == 0) {
             SetTextColor(memDC, RGB(255, 50, 50));
@@ -248,7 +318,6 @@ void RenderScene(HDC hdc) {
         }
     }
     else if (gameState == STATE_PLAY || gameState == STATE_OVER) {
-        //GAMEPLAY RENDER 
         HBRUSH skyBrush = CreateSolidBrush(COL_SKY);
         RECT bg = { 0, 0, WIN_WIDTH, GROUND_Y };
         FillRect(memDC, &bg, skyBrush);
@@ -272,8 +341,29 @@ void RenderScene(HDC hdc) {
         FillRect(memDC, &cactusArm, cactusBrush);
         DeleteObject(cactusBrush);
 
+      //Drawing dust
+        HBRUSH dustBrush = CreateSolidBrush(COL_DUST);
+        for (int i = 0; i < 20; i++) {
+            if (dust[i].life > 0) {
+                RECT dRect = { (int)dust[i].x, (int)dust[i].y, (int)dust[i].x + 24, (int)dust[i].y + 3 };
+                FillRect(memDC, &dRect, dustBrush);
+            }
+        }
+        DeleteObject(dustBrush);
+
         DrawCowboy(memDC, &sheriff, COL_SHERIFF);
         DrawCowboy(memDC, &bandit, COL_BANDIT);
+
+        HBRUSH flashBrush = CreateSolidBrush(RGB(255, 255, 200));
+        if (pFlash > 0) {
+            RECT fRect = { (int)sheriff.x + sheriff.width, (int)sheriff.y + (sheriff.isDucking ? 40 : 20) - 4, (int)sheriff.x + sheriff.width + 12, (int)sheriff.y + (sheriff.isDucking ? 40 : 20) + 4 };
+            FillRect(memDC, &fRect, flashBrush);
+        }
+        if (eFlash > 0) {
+            RECT fRect = { (int)bandit.x - 12, (int)bandit.y + (bandit.isDucking ? 40 : 20) - 4, (int)bandit.x, (int)bandit.y + (bandit.isDucking ? 40 : 20) + 4 };
+            FillRect(memDC, &fRect, flashBrush);
+        }
+        DeleteObject(flashBrush);
 
         HBRUSH bulletBrush = CreateSolidBrush(COL_BULLET);
         if (pBullet.isActive) {
@@ -286,13 +376,43 @@ void RenderScene(HDC hdc) {
         }
         DeleteObject(bulletBrush);
 
+        HBRUSH sparkBrush = CreateSolidBrush(RGB(255, 50, 50));
+        for (int i = 0; i < 15; i++) {
+            if (sparks[i].life > 0) {
+                RECT sRect = { (int)sparks[i].x, (int)sparks[i].y, (int)sparks[i].x + 3, (int)sparks[i].y + 3 };
+                FillRect(memDC, &sRect, sparkBrush);
+            }
+        }
+        DeleteObject(sparkBrush);
+
         SetTextColor(memDC, RGB(255, 255, 255));
         SetBkMode(memDC, TRANSPARENT);
         SelectObject(memDC, fontSmall);
         sprintf_s(textBuf, sizeof(textBuf), "BOUNTY: $%d", currentScore);
         TextOutA(memDC, 20, 20, textBuf, (int)strlen(textBuf));
 
-        //GAME OVER OVERLAY
+        HBRUSH redBrush = CreateSolidBrush(RGB(255, 40, 40));
+        HBRUSH oldBrush = (HBRUSH)SelectObject(memDC, redBrush);
+        for (int i = 0; i < playerHP; i++) {
+            RECT hpRect = { 20 + (i * 15), 50, 30 + (i * 15), 60 };
+            FillRect(memDC, &hpRect, redBrush);
+        }
+        for (int i = 0; i < enemyHP; i++) {
+            RECT hpRect = { WIN_WIDTH - 60 + (i * 15), 50, WIN_WIDTH - 50 + (i * 15), 60 };
+            FillRect(memDC, &hpRect, redBrush);
+        }
+        SelectObject(memDC, oldBrush);
+        DeleteObject(redBrush);
+
+        char ammoBuf[32];
+        if (currentAmmo == AMMO_NORMAL) sprintf_s(ammoBuf, sizeof(ammoBuf), "AMMO: 1-NORMAL");
+        if (currentAmmo == AMMO_FAST)   sprintf_s(ammoBuf, sizeof(ammoBuf), "AMMO: 2-FAST");
+        if (currentAmmo == AMMO_HEAVY)  sprintf_s(ammoBuf, sizeof(ammoBuf), "AMMO: 3-HEAVY (X2 DMG)");
+
+        SelectObject(memDC, fontSmall);
+        SetTextColor(memDC, COL_UI_ACCENT);
+        TextOutA(memDC, WIN_WIDTH / 2 - 100, WIN_HEIGHT - 60, ammoBuf, (int)strlen(ammoBuf));
+
         if (gameState == STATE_OVER) {
             HBRUSH overlay = CreateSolidBrush(RGB(0, 0, 0));
             RECT ovRect = { WIN_WIDTH / 2 - 160, WIN_HEIGHT / 2 - 60, WIN_WIDTH / 2 + 160, WIN_HEIGHT / 2 + 60 };
@@ -313,7 +433,6 @@ void RenderScene(HDC hdc) {
         }
     }
 
-    // CRT Scanline Effect
     HPEN scanPen = CreatePen(PS_SOLID, 1, RGB(0, 0, 0));
     SelectObject(memDC, scanPen);
     for (int y = 0; y < WIN_HEIGHT; y += 4) {
@@ -327,8 +446,6 @@ void RenderScene(HDC hdc) {
     DeleteObject(fontTitle); DeleteObject(fontLarge); DeleteObject(fontSmall);
     DeleteObject(memBitmap); DeleteDC(memDC);
 }
-
-//Window Procedure & Entry Point 
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (msg == WM_DESTROY) { PostQuitMessage(0); return 0; }
@@ -353,7 +470,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     MSG msg;
     int enterPressed = 0;
 
-    // Main Game Loop
     while (1) {
         if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
             if (msg.message == WM_QUIT) break;
@@ -383,8 +499,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             if ((GetAsyncKeyState(VK_SPACE) & 0x8000) && !pBullet.isActive) {
                 pBullet.x = sheriff.x + sheriff.width;
                 pBullet.y = sheriff.isDucking ? sheriff.y + 40 : sheriff.y + 20;
-                pBullet.dx = 15.0f;
+
+                if (currentAmmo == AMMO_FAST)  pBullet.dx = 25.0f;
+                else if (currentAmmo == AMMO_HEAVY) pBullet.dx = 8.0f;
+                else pBullet.dx = 15.0f;
+
                 pBullet.isActive = 1;
+                pFlash = 4;
             }
             UpdatePhysicsAndLogic();
             break;
